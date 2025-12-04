@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>麻雀配牌 勝率予測AI</title>
+    <title>麻雀配牌 上がり率予測AI</title>
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
     <style>
         body { font-family: "Helvetica Neue", Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; text-align: center; background-color: #f4f4f4; }
@@ -91,8 +91,28 @@
             margin-left: 10px;
         }
 
-        /* 結果・警告表示 */
-        #result { margin-top: 20px; font-size: 28px; font-weight: bold; min-height: 40px;}
+        /* 結果表示エリア */
+        #result-container {
+            margin-top: 20px;
+            min-height: 50px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #result-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #d9534f;
+        }
+
+        #result-note {
+            font-size: 14px;
+            color: #666;
+            margin-top: 5px;
+        }
+
         #warning { color: red; font-weight: bold; height: 24px; margin-bottom: 5px;}
         
         .loading { color: #666; font-size: 14px; }
@@ -100,7 +120,7 @@
 </head>
 <body>
 
-    <h1>🀄 麻雀配牌 勝率予測AI</h1>
+    <h1>🀄 麻雀配牌 上がり率予測AI</h1>
 
     <div id="warning"></div>
     <div class="hand-display" id="currentHand">
@@ -111,7 +131,10 @@
         <button class="reset-btn" onclick="resetHand()">リセット</button>
     </div>
 
-    <div id="result"></div>
+    <div id="result-container">
+        <div id="result-value"></div>
+        <div id="result-note"></div>
+    </div>
 
     <div class="keyboard">
         <div class="row" id="row-man"></div> <div class="row" id="row-pin"></div> <div class="row" id="row-sou"></div> <div class="row" id="row-hon"></div> </div>
@@ -125,7 +148,7 @@
         // 選択された牌のIDリスト (0~135)
         let selectedHandIds = [];
 
-        // 牌の定義 (Unicode文字と種類)
+        // 牌の定義
         const TILES = {
             man: ['🀇','🀈','🀉','🀊','🀋','🀌','🀍','🀎','🀏'], // 1-9萬
             pin: ['🀙','🀚','🀛','🀜','🀝','🀞','🀟','🀠','🀡'], // 1-9筒
@@ -137,15 +160,15 @@
         window.onload = async function() {
             createKeyboard();
             await loadModel();
-            updateDisplay(); // 初回描画
+            updateDisplay(); 
         };
 
         // キーボード生成
         function createKeyboard() {
-            createRow('row-man', TILES.man, 'man', 0);  // 萬子: type 0-8
-            createRow('row-pin', TILES.pin, 'pin', 9);  // 筒子: type 9-17
-            createRow('row-sou', TILES.sou, 'sou', 18); // 索子: type 18-26
-            createRow('row-hon', TILES.hon, 'red', 27); // 字牌: type 27-33
+            createRow('row-man', TILES.man, 'man', 0);  
+            createRow('row-pin', TILES.pin, 'pin', 9);  
+            createRow('row-sou', TILES.sou, 'sou', 18); 
+            createRow('row-hon', TILES.hon, 'red', 27); 
         }
 
         function createRow(elementId, chars, colorClass, typeOffset) {
@@ -154,7 +177,6 @@
                 const btn = document.createElement('div');
                 btn.className = `tile ${colorClass}`;
                 btn.innerText = char;
-                // クリック時の処理: その種類の牌を追加
                 btn.onclick = () => addTile(typeOffset + index, char, colorClass);
                 container.appendChild(btn);
             });
@@ -172,39 +194,29 @@
             }
         }
 
-        // 牌を追加する処理
+        // 牌を追加
         function addTile(typeIndex, char, colorClass) {
-            if (selectedHandIds.length >= 14) return; // 最大14枚まで（一応）
+            if (selectedHandIds.length >= 14) return; 
 
-            // typeIndex (0~33) を 天鳳ID (0~135) に簡易変換
-            // モデルは ID//4 で種類を見るので、各種類の一番若い番号(type*4)を使えばOK
-            // ※赤ドラを入れたい場合はここで分岐が必要ですが、今回は黒5にします
             const id = typeIndex * 4; 
-            
             selectedHandIds.push({ id: id, char: char, color: colorClass });
-            
-            // 理牌（ソート）: ID順に並べる
             selectedHandIds.sort((a, b) => a.id - b.id);
-            
             updateDisplay();
         }
 
-        // 手牌表示の更新 & バリデーション
+        // 表示更新 & バリデーション
         function updateDisplay() {
             const container = document.getElementById('currentHand');
             container.innerHTML = '';
 
-            // 手牌を描画
             selectedHandIds.forEach((tile, index) => {
                 const div = document.createElement('div');
                 div.className = `tile ${tile.color}`;
                 div.innerText = tile.char;
-                // クリックで削除
                 div.onclick = () => removeTile(index);
                 container.appendChild(div);
             });
 
-            // 13枚チェック
             const count = selectedHandIds.length;
             const warnEl = document.getElementById('warning');
             const btn = document.getElementById('predictBtn');
@@ -218,16 +230,15 @@
             }
         }
 
-        // 牌を削除
         function removeTile(index) {
             selectedHandIds.splice(index, 1);
             updateDisplay();
         }
 
-        // リセット
         function resetHand() {
             selectedHandIds = [];
-            document.getElementById('result').innerText = "";
+            document.getElementById('result-value').innerText = "";
+            document.getElementById('result-note').innerText = "";
             updateDisplay();
         }
 
@@ -235,23 +246,19 @@
         async function runPrediction() {
             if (!session) return;
 
-            // 入力ベクトル作成 (35次元)
+            // 入力ベクトル作成
             const counts = new Int32Array(35).fill(0);
             
             selectedHandIds.forEach(tile => {
-                // IDから種類(0-33)を復元
                 const type = Math.floor(tile.id / 4);
                 if(type >= 0 && type < 34) {
                     counts[type]++;
                 }
-                // 今回はボタン入力なので赤ドラ(ID:16,52,88)は含まれないが、
-                // ロジックとしては残しておく
                 if ([16, 52, 88].includes(tile.id)) {
                     counts[34]++;
                 }
             });
 
-            // Tensor作成
             try {
                 const dataBigInt = BigInt64Array.from(Array.from(counts).map(n => BigInt(n)));
                 const tensor = new ort.Tensor('int64', dataBigInt, [1, 35]);
@@ -262,7 +269,10 @@
                 const probability = outputData[0];
 
                 const percentage = (probability * 100).toFixed(2);
-                document.getElementById('result').innerHTML = `予測勝率: <span style="color:#d9534f">${percentage}%</span>`;
+                
+                // 結果表示の更新
+                document.getElementById('result-value').innerHTML = `予測勝率: ${percentage}%`;
+                document.getElementById('result-note').innerText = "(平均上がり率は21.08％)";
 
             } catch (e) {
                 console.error(e);
