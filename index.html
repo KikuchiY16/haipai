@@ -6,116 +6,269 @@
     <title>麻雀配牌 勝率予測AI</title>
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
     <style>
-        body { font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
-        textarea { width: 100%; height: 80px; margin-bottom: 10px; }
-        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 5px; }
-        button:disabled { background-color: #ccc; }
-        #result { margin-top: 20px; font-size: 24px; font-weight: bold; }
-        .note { font-size: 12px; color: #666; }
+        body { font-family: "Helvetica Neue", Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; text-align: center; background-color: #f4f4f4; }
+        
+        h1 { color: #333; }
+        
+        /* 手牌表示エリア */
+        .hand-display {
+            background-color: #225522; /* 雀卓の色 */
+            min-height: 60px;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 5px;
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
+        }
+
+        .tile {
+            width: 40px;
+            height: 56px;
+            background-color: #fff;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+            cursor: pointer;
+            user-select: none;
+            position: relative;
+            color: black;
+        }
+        
+        .tile.man { color: #800000; } /* 萬子は赤っぽく */
+        .tile.pin { color: #000080; } /* 筒子は青っぽく */
+        .tile.sou { color: #006400; } /* 索子は緑っぽく */
+        .tile.red { color: red; }     /* 中など */
+
+        /* 牌キーボード */
+        .keyboard {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .row {
+            display: flex;
+            justify-content: center;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+
+        /* ボタン類 */
+        .controls { margin: 20px 0; }
+        
+        button.action-btn {
+            padding: 12px 24px;
+            font-size: 18px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            transition: background 0.3s;
+        }
+        button.action-btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        button.action-btn:hover:not(:disabled) {
+            background-color: #0056b3;
+        }
+
+        button.reset-btn {
+            padding: 12px 24px;
+            font-size: 18px;
+            cursor: pointer;
+            background-color: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            margin-left: 10px;
+        }
+
+        /* 結果・警告表示 */
+        #result { margin-top: 20px; font-size: 28px; font-weight: bold; min-height: 40px;}
+        #warning { color: red; font-weight: bold; height: 24px; margin-bottom: 5px;}
+        
+        .loading { color: #666; font-size: 14px; }
     </style>
 </head>
 <body>
 
     <h1>🀄 麻雀配牌 勝率予測AI</h1>
-    <p>天鳳の配牌ID（カンマ区切り）を入力してください。</p>
-    
-    <textarea id="handInput" placeholder="例: 11,12,13,45,46,47,88,89..."></textarea>
-    <br>
-    <button id="predictBtn" onclick="runPrediction()">予測する</button>
 
-    <div id="result">ここに結果が表示されます</div>
-    
-    <p class="note">※初回はモデル読み込みに数秒かかる場合があります。</p>
+    <div id="warning"></div>
+    <div class="hand-display" id="currentHand">
+        </div>
+
+    <div class="controls">
+        <button id="predictBtn" class="action-btn" onclick="runPrediction()" disabled>予測する</button>
+        <button class="reset-btn" onclick="resetHand()">リセット</button>
+    </div>
+
+    <div id="result"></div>
+
+    <div class="keyboard">
+        <div class="row" id="row-man"></div> <div class="row" id="row-pin"></div> <div class="row" id="row-sou"></div> <div class="row" id="row-hon"></div> </div>
+
+    <p class="loading" id="statusMsg">モデルを読み込んでいます...</p>
 
     <script>
-        // ONNXモデルのパス (同じ階層に置いてある前提)
         const MODEL_PATH = './mahjong_model.onnx';
         let session = null;
+        
+        // 選択された牌のIDリスト (0~135)
+        let selectedHandIds = [];
 
-        // 1. ページ読み込み時にモデルをロード
+        // 牌の定義 (Unicode文字と種類)
+        const TILES = {
+            man: ['🀇','🀈','🀉','🀊','🀋','🀌','🀍','🀎','🀏'], // 1-9萬
+            pin: ['🀙','🀚','🀛','🀜','🀝','🀞','🀟','🀠','🀡'], // 1-9筒
+            sou: ['🀐','🀑','🀒','🀓','🀔','🀕','🀖','🀗','🀘'], // 1-9索
+            hon: ['🀀','🀁','🀂','🀃','🀆','🀅','🀄']           // 東南西北白發中
+        };
+
+        // 初期化処理
+        window.onload = async function() {
+            createKeyboard();
+            await loadModel();
+            updateDisplay(); // 初回描画
+        };
+
+        // キーボード生成
+        function createKeyboard() {
+            createRow('row-man', TILES.man, 'man', 0);  // 萬子: type 0-8
+            createRow('row-pin', TILES.pin, 'pin', 9);  // 筒子: type 9-17
+            createRow('row-sou', TILES.sou, 'sou', 18); // 索子: type 18-26
+            createRow('row-hon', TILES.hon, 'red', 27); // 字牌: type 27-33
+        }
+
+        function createRow(elementId, chars, colorClass, typeOffset) {
+            const container = document.getElementById(elementId);
+            chars.forEach((char, index) => {
+                const btn = document.createElement('div');
+                btn.className = `tile ${colorClass}`;
+                btn.innerText = char;
+                // クリック時の処理: その種類の牌を追加
+                btn.onclick = () => addTile(typeOffset + index, char, colorClass);
+                container.appendChild(btn);
+            });
+        }
+
+        // モデルロード
         async function loadModel() {
             try {
-                document.getElementById('result').innerText = "モデルを読み込み中...";
-                // 推論セッションの作成
                 session = await ort.InferenceSession.create(MODEL_PATH);
-                document.getElementById('result').innerText = "準備完了。配牌を入力してください。";
-                console.log("Model loaded successfully");
+                document.getElementById('statusMsg').innerText = "準備完了";
+                console.log("Model loaded");
             } catch (e) {
                 console.error(e);
-                document.getElementById('result').innerText = "モデルの読み込みに失敗しました (詳細はコンソール)";
+                document.getElementById('statusMsg').innerText = "モデル読み込みエラー";
             }
         }
 
-        // 2. 入力文字列をAI用のベクトルに変換 (Pythonのvectorize_hand_tensorと同じロジック)
-        function textToVector(text) {
-            // 35個のゼロ配列
+        // 牌を追加する処理
+        function addTile(typeIndex, char, colorClass) {
+            if (selectedHandIds.length >= 14) return; // 最大14枚まで（一応）
+
+            // typeIndex (0~33) を 天鳳ID (0~135) に簡易変換
+            // モデルは ID//4 で種類を見るので、各種類の一番若い番号(type*4)を使えばOK
+            // ※赤ドラを入れたい場合はここで分岐が必要ですが、今回は黒5にします
+            const id = typeIndex * 4; 
+            
+            selectedHandIds.push({ id: id, char: char, color: colorClass });
+            
+            // 理牌（ソート）: ID順に並べる
+            selectedHandIds.sort((a, b) => a.id - b.id);
+            
+            updateDisplay();
+        }
+
+        // 手牌表示の更新 & バリデーション
+        function updateDisplay() {
+            const container = document.getElementById('currentHand');
+            container.innerHTML = '';
+
+            // 手牌を描画
+            selectedHandIds.forEach((tile, index) => {
+                const div = document.createElement('div');
+                div.className = `tile ${tile.color}`;
+                div.innerText = tile.char;
+                // クリックで削除
+                div.onclick = () => removeTile(index);
+                container.appendChild(div);
+            });
+
+            // 13枚チェック
+            const count = selectedHandIds.length;
+            const warnEl = document.getElementById('warning');
+            const btn = document.getElementById('predictBtn');
+
+            if (count === 13) {
+                warnEl.innerText = "";
+                btn.disabled = false;
+            } else {
+                warnEl.innerText = `現在 ${count} 枚です。13枚にしてください。`;
+                btn.disabled = true;
+            }
+        }
+
+        // 牌を削除
+        function removeTile(index) {
+            selectedHandIds.splice(index, 1);
+            updateDisplay();
+        }
+
+        // リセット
+        function resetHand() {
+            selectedHandIds = [];
+            document.getElementById('result').innerText = "";
+            updateDisplay();
+        }
+
+        // 予測実行
+        async function runPrediction() {
+            if (!session) return;
+
+            // 入力ベクトル作成 (35次元)
             const counts = new Int32Array(35).fill(0);
             
-            if (!text) return counts;
-
-            const ids = text.split(',').map(s => parseInt(s.trim()));
-            
-            for (let tid of ids) {
-                if (isNaN(tid)) continue;
-
-                // 牌の種類 (0~33)
-                let type = Math.floor(tid / 4);
-                if (type >= 0 && type < 34) {
+            selectedHandIds.forEach(tile => {
+                // IDから種類(0-33)を復元
+                const type = Math.floor(tile.id / 4);
+                if(type >= 0 && type < 34) {
                     counts[type]++;
                 }
-                // 赤ドラ (16, 52, 88) -> index 34
-                if ([16, 52, 88].includes(tid)) {
+                // 今回はボタン入力なので赤ドラ(ID:16,52,88)は含まれないが、
+                // ロジックとしては残しておく
+                if ([16, 52, 88].includes(tile.id)) {
                     counts[34]++;
                 }
-            }
-            
-            // 最大4枚制限 (念のため)
-            for(let i=0; i<35; i++) {
-                if(counts[i] > 4) counts[i] = 4;
-            }
-            
-            return counts;
-        }
+            });
 
-        // 3. 予測実行ボタン
-        async function runPrediction() {
-            if (!session) {
-                alert("モデルがまだ読み込まれていません");
-                return;
-            }
-
-            const text = document.getElementById('handInput').value;
-            const inputVector = textToVector(text);
-
+            // Tensor作成
             try {
-                // Tensorの作成
-                // Pythonでの型は Long (int64) でしたが、ONNX Runtime JSでは BigInt64Array を使うか
-                // モデル変換時にInt32にしておくのが一般的です。
-                // 今回はPyTorchのEmbeddingがLongを要求するため、BigInt64Arrayを使います。
-                const dataBigInt = BigInt64Array.from(Array.from(inputVector).map(n => BigInt(n)));
+                const dataBigInt = BigInt64Array.from(Array.from(counts).map(n => BigInt(n)));
                 const tensor = new ort.Tensor('int64', dataBigInt, [1, 35]);
 
-                // 推論実行
-                // feeds: input_names ('input') に tensor を渡す
                 const feeds = { input: tensor };
                 const results = await session.run(feeds);
-
-                // 結果取得 (output_names 'output')
                 const outputData = results.output.data;
-                const probability = outputData[0]; // 1つ目の値
+                const probability = outputData[0];
 
-                // 表示
                 const percentage = (probability * 100).toFixed(2);
-                document.getElementById('result').innerHTML = `予測勝率: <span style="color:red">${percentage}%</span>`;
+                document.getElementById('result').innerHTML = `予測勝率: <span style="color:#d9534f">${percentage}%</span>`;
 
             } catch (e) {
                 console.error(e);
-                alert("予測中にエラーが発生しました: " + e);
+                alert("エラー: " + e);
             }
         }
-
-        // 開始
-        loadModel();
     </script>
 </body>
 </html>
