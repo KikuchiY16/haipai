@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>麻雀配牌 勝率予測AI</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+    <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
+        textarea { width: 100%; height: 80px; margin-bottom: 10px; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 5px; }
+        button:disabled { background-color: #ccc; }
+        #result { margin-top: 20px; font-size: 24px; font-weight: bold; }
+        .note { font-size: 12px; color: #666; }
+    </style>
+</head>
+<body>
+
+    <h1>🀄 麻雀配牌 勝率予測AI</h1>
+    <p>天鳳の配牌ID（カンマ区切り）を入力してください。</p>
+    
+    <textarea id="handInput" placeholder="例: 11,12,13,45,46,47,88,89..."></textarea>
+    <br>
+    <button id="predictBtn" onclick="runPrediction()">予測する</button>
+
+    <div id="result">ここに結果が表示されます</div>
+    
+    <p class="note">※初回はモデル読み込みに数秒かかる場合があります。</p>
+
+    <script>
+        // ONNXモデルのパス (同じ階層に置いてある前提)
+        const MODEL_PATH = './mahjong_model.onnx';
+        let session = null;
+
+        // 1. ページ読み込み時にモデルをロード
+        async function loadModel() {
+            try {
+                document.getElementById('result').innerText = "モデルを読み込み中...";
+                // 推論セッションの作成
+                session = await ort.InferenceSession.create(MODEL_PATH);
+                document.getElementById('result').innerText = "準備完了。配牌を入力してください。";
+                console.log("Model loaded successfully");
+            } catch (e) {
+                console.error(e);
+                document.getElementById('result').innerText = "モデルの読み込みに失敗しました (詳細はコンソール)";
+            }
+        }
+
+        // 2. 入力文字列をAI用のベクトルに変換 (Pythonのvectorize_hand_tensorと同じロジック)
+        function textToVector(text) {
+            // 35個のゼロ配列
+            const counts = new Int32Array(35).fill(0);
+            
+            if (!text) return counts;
+
+            const ids = text.split(',').map(s => parseInt(s.trim()));
+            
+            for (let tid of ids) {
+                if (isNaN(tid)) continue;
+
+                // 牌の種類 (0~33)
+                let type = Math.floor(tid / 4);
+                if (type >= 0 && type < 34) {
+                    counts[type]++;
+                }
+                // 赤ドラ (16, 52, 88) -> index 34
+                if ([16, 52, 88].includes(tid)) {
+                    counts[34]++;
+                }
+            }
+            
+            // 最大4枚制限 (念のため)
+            for(let i=0; i<35; i++) {
+                if(counts[i] > 4) counts[i] = 4;
+            }
+            
+            return counts;
+        }
+
+        // 3. 予測実行ボタン
+        async function runPrediction() {
+            if (!session) {
+                alert("モデルがまだ読み込まれていません");
+                return;
+            }
+
+            const text = document.getElementById('handInput').value;
+            const inputVector = textToVector(text);
+
+            try {
+                // Tensorの作成
+                // Pythonでの型は Long (int64) でしたが、ONNX Runtime JSでは BigInt64Array を使うか
+                // モデル変換時にInt32にしておくのが一般的です。
+                // 今回はPyTorchのEmbeddingがLongを要求するため、BigInt64Arrayを使います。
+                const dataBigInt = BigInt64Array.from(Array.from(inputVector).map(n => BigInt(n)));
+                const tensor = new ort.Tensor('int64', dataBigInt, [1, 35]);
+
+                // 推論実行
+                // feeds: input_names ('input') に tensor を渡す
+                const feeds = { input: tensor };
+                const results = await session.run(feeds);
+
+                // 結果取得 (output_names 'output')
+                const outputData = results.output.data;
+                const probability = outputData[0]; // 1つ目の値
+
+                // 表示
+                const percentage = (probability * 100).toFixed(2);
+                document.getElementById('result').innerHTML = `予測勝率: <span style="color:red">${percentage}%</span>`;
+
+            } catch (e) {
+                console.error(e);
+                alert("予測中にエラーが発生しました: " + e);
+            }
+        }
+
+        // 開始
+        loadModel();
+    </script>
+</body>
+</html>
