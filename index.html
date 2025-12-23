@@ -14,15 +14,18 @@
         /* 手牌表示エリア */
         .hand-display {
             background-color: #225522; 
-            min-height: 60px;
+            /* 14枚入るとスマホでは2行になるため、最初からその高さを確保 */
+            height: 140px;  /* PC用高さ */
             padding: 10px;
             border-radius: 8px;
             margin-bottom: 20px;
             display: flex;
             justify-content: center;
+            align-content: flex-start; /* 牌を上詰めで配置 */
             flex-wrap: wrap;
             gap: 5px;
             box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
+            box-sizing: border-box; /* パディングを含めた高さ計算にする */
         }
 
         .tile {
@@ -41,7 +44,69 @@
             color: black;
             transition: transform 0.1s;
         }
-        
+        /* --- インフォメーションボタンのスタイル (新規) --- */
+        .info-btn {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            width: 36px;
+            height: 36px;
+            background-color: #fff;
+            color: #333;
+            border-radius: 50%;
+            font-weight: bold;
+            font-size: 20px;
+            line-height: 36px;
+            text-align: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            cursor: pointer;
+            user-select: none;
+            z-index: 100; /* 他の要素より手前に */
+        }
+        .info-btn:active { transform: scale(0.9); }
+
+        /* --- モーダル（ポップアップ）のスタイル (新規) --- */
+        .modal-overlay {
+            display: none; /* 最初は隠す */
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background-color: rgba(0, 0, 0, 0.6);
+            z-index: 999;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-content {
+            background-color: #fff;
+            padding: 25px;
+            border-radius: 10px;
+            max-width: 90%;
+            width: 400px;
+            text-align: left;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            position: relative;
+        }
+        .modal-content h2 { margin-top: 0; color: #333; text-align: center; }
+        .modal-content ul { padding-left: 20px; line-height: 1.6; }
+        .close-modal-btn {
+            display: block;
+            margin: 20px auto 0;
+            background-color: #333;
+            color: #fff;
+            padding: 10px 30px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        /* --- スマホ向け調整の追記 --- */
+        @media screen and (max-width: 600px) {
+            /* スマホでは牌が小さいのでエリアの高さも少し調整 */
+            .hand-display {
+                height: 110px; /* スマホでの2行分+余白 */
+            }
+        }
         .tile:active { transform: scale(0.95); } /* 押した感 */
         
         .tile.man { color: #800000; } 
@@ -163,10 +228,25 @@
         }
     </style>
 </head>
+
 <body>
 
-    <h1>🀄 麻雀配牌 上がり率予測AI</h1>
+    <div class="info-btn" onclick="toggleModal()">i</div>
 
+    <div id="infoModal" class="modal-overlay" onclick="toggleModal()">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <h2>🀄 使い方</h2>
+            <ul>
+                <li><strong>配牌入力:</strong> 下のキーボードから牌をタップして手牌を作ります。</li>
+                <li><strong>削除:</strong> 間違えた場合は、手牌の牌をタップすると消えます。</li>
+                <li><strong>予測:</strong> 13枚入力すると「予測する」ボタンが押せるようになります。</li>
+                <li><strong>結果:</strong> 現在の配牌からの上がり率（%）が表示されます。</li>
+            </ul>
+            <button class="close-modal-btn" onclick="toggleModal()">閉じる</button>
+        </div>
+    </div>
+
+    <h1>🀄 麻雀配牌 上がり率予測AI</h1>
     <div id="warning"></div>
     <div class="hand-display" id="currentHand"></div>
 
@@ -251,6 +331,7 @@
             const container = document.getElementById('currentHand');
             container.innerHTML = '';
 
+            // 1. タイルを描画
             selectedHandIds.forEach((tile, index) => {
                 const div = document.createElement('div');
                 div.className = `tile ${tile.color}`;
@@ -259,16 +340,38 @@
                 container.appendChild(div);
             });
 
+            // 2. 枚数チェックと重複チェック
             const count = selectedHandIds.length;
             const warnEl = document.getElementById('warning');
             const btn = document.getElementById('predictBtn');
 
-            if (count === 13) {
-                warnEl.innerText = "";
-                btn.disabled = false;
-            } else {
+            // 同じ牌が何枚あるかカウントする
+            const tileCounts = {};
+            let hasError = false;
+
+            for (const tile of selectedHandIds) {
+                // 牌の文字(char)をキーにしてカウント
+                if (!tileCounts[tile.char]) {
+                    tileCounts[tile.char] = 0;
+                }
+                tileCounts[tile.char]++;
+                
+                // 5枚以上になったらエラーフラグを立てる
+                if (tileCounts[tile.char] >= 5) {
+                    hasError = true;
+                }
+            }
+
+            // 3. 状態に応じたメッセージとボタン制御
+            if (hasError) {
+                warnEl.innerText = "同じ牌が5枚以上含まれています（最大4枚まで）。";
+                btn.disabled = true;
+            } else if (count !== 13) {
                 warnEl.innerText = `現在 ${count} 枚です。13枚にしてください。`;
                 btn.disabled = true;
+            } else {
+                warnEl.innerText = "";
+                btn.disabled = false;
             }
         }
 
@@ -316,6 +419,15 @@
                 // ボタンを戻す
                 btn.disabled = false;
                 btn.innerText = "予測する";
+            }
+        }
+        function toggleModal() {
+            const modal = document.getElementById('infoModal');
+            // 現在の表示状態を確認して切り替え
+            if (modal.style.display === 'flex') {
+                modal.style.display = 'none';
+            } else {
+                modal.style.display = 'flex';
             }
         }
     </script>
